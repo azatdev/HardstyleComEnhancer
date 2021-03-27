@@ -4422,7 +4422,7 @@ const $playingBorder = '#018a27';
 const $played = '#ccffcc';
 const $notDone = '#ffffcc';
 const $wishlisted = '#ff8a00';
-const $buttonMargin = '6px';
+const $buttonMargin = '5px';
 
 const css = `
 .playing {
@@ -4470,6 +4470,45 @@ table.list tr td:first-child a {
 #player_info .ellipsis {
   margin-left: 4px;
 }
+.csstooltip {
+  position: relative;
+  display: inline-block;
+  border-bottom: 1px dotted black;
+}
+.csstooltip .tooltiptext {
+  visibility: hidden;
+  width: 140px;
+  background-color: #1e1e1e;
+  color: #fff;
+  text-align: center;
+  padding: 5px 0;
+  position: absolute;
+  z-index: 9;
+  bottom: 100%;
+  left: 50%;
+  margin-left: -70px;
+  line-height: 26px;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  top: -24px;
+}
+.csstooltip:hover .tooltiptext {
+  visibility: visible;
+}
+.caption-new {
+  display: none;
+  font-family: "nimbus-sans-condensed";
+  position: absolute;
+  font-size: 12px;
+  text-transform: uppercase;
+  font-weight: bold;
+  right: -5px;
+  top: -3px;
+  color: #dbfe01;
+}
+.play-new .caption-new {
+  display: block;
+}
 `;
 
 const element  = document.createElement("style");
@@ -4500,11 +4539,14 @@ class HardstyleComEnhancer {
     this.albumInfo = {};
     this.playerItem;
     this.wishlistItem;
+    let cookie = $.cookie('autoplay');
+    this.autoPlay = cookie ? cookie - 1 : "";
     this.db = db;
     this.initDB();
     this.getPageType();
     this.processItems();
     this.upgradePlayer();
+    this.switchAutoPlayCookie();
   }
   // in the wishlist page add a class delete button to hijack and enhance functionality
   addClassToDeleteButton() {
@@ -4545,6 +4587,14 @@ class HardstyleComEnhancer {
         reject(error);
       });
     });
+  }
+  // on the wishlist page, when the clear wishlist is clicked
+  async clearWishlist(ev) {
+    if (this.pageType = 'wishlist') {
+      const url = ev.currentTarget.href;
+      await this.unwishAll();
+      window.location.assign(url);
+    }
   }
   // get item info from server and local db to construct the item that's not in the grid.
   async constructItem(itemId) {
@@ -4587,6 +4637,51 @@ class HardstyleComEnhancer {
       mixType: infoArray.pop(),
     };
     return infoObject;
+  }
+  // based on the current autoplay selection, toggle next one and populate the button
+  switchAutoPlayCookie() {
+    let newValue;
+    const tooltipContainer = $('<div class="csstooltip"></div>');
+    const tooltipTextContainer = $('<span class="tooltiptext"></span>');
+    const anchorContainer = $('<a class="player-button"></a>');
+    const iconContainer = $('<i class="fa"><span class="caption-new">new</span></i>');
+    switch (this.autoPlay) {
+      case "":
+      case 0:
+      case 5:
+        newValue = 1;
+        iconContainer.addClass('fa-list-ul play-new');
+        tooltipTextContainer.text('queueing next new track');
+        break;
+      case 1:
+        newValue = 2;
+        iconContainer.addClass('fa-list-ol');
+        tooltipTextContainer.text('queueing next track');
+        break;
+      case 2:
+        newValue = 3;
+        iconContainer.addClass('fa-random play-new');
+        tooltipTextContainer.text('shuffling new tracks');
+        break;
+      case 3:
+        newValue = 4;
+        iconContainer.addClass('fa-random');
+        tooltipTextContainer.text('shuffling all tracks');
+        break;
+      case 4:
+        newValue = 5;
+        iconContainer.addClass('fa-stop-circle-o');
+        tooltipTextContainer.text('auto play off');
+        break;
+      default:
+        break;
+    }
+    anchorContainer.html(iconContainer);
+    tooltipContainer.append(tooltipTextContainer);
+    tooltipContainer.append(anchorContainer);
+    $("#autoPlayContainer").html(tooltipContainer);
+    this.autoPlay = newValue;
+    $.cookie('autoplay', newValue, { expires: 365, path: '/' });
   }
   // get item from class items
   getItem(itemId) {
@@ -4692,7 +4787,10 @@ class HardstyleComEnhancer {
     } else if (this.pageType === 'wishlist') {
       this.addClassToDeleteButton();
       this.verifyWishlistedItems();
-    }
+    } 
+    // else if (this.pageType === 'top40') {
+      
+    // }
   }
   // create track info in the database
   putRecord(itemInfo, payload) {
@@ -4739,6 +4837,18 @@ class HardstyleComEnhancer {
     }
     if (nextItem) $('tr[data-itemid="'+ nextItem.id +'"]').find('.play').first().trigger('click');
   }
+  // used for when the user enters on wishlist page to sync wishlist with local and when user clicks Clear Wishlist
+  async unwishAll() {
+    const records = await handle(this.db.tracks.where({
+      wishlisted: 1,
+    }).toArray());
+    const wishlistedRecords = records[1];
+    for (const oldRecord of wishlistedRecords) {
+      const [oldErr] = await handle(this.db.tracks.update(oldRecord.id, {wishlisted: 0}));
+      if (oldErr) return console.log(oldErr);
+    }
+    return true;
+  }
   // replace the old album info in the db with new
   async updateAlbumInfo() {
     const [err, record] = await handle(this.putRecord({type: 'album', id: this.albumInfo.id}, this.albumInfo));
@@ -4777,6 +4887,8 @@ class HardstyleComEnhancer {
     const youtubeButton = $('<li class="right"><a id="player_youtube_button" class="player-button"><i class="fa fa-youtube"></i></a></li>');
     const volumeButton = $("#player_volume_button").parent('li');
     volumeButton.after(youtubeButton);
+    const autoPlayButton = $('<li class="right" id="autoPlayContainer"></li>');
+    backwardButton.after(autoPlayButton);
     setTimeout(async () => {
       const mediaUrl = $('#jplayer').data('jPlayer').status['src'];
       const itemId = this.extractId(mediaUrl);
@@ -4787,14 +4899,7 @@ class HardstyleComEnhancer {
   }
   // when user enters wishlist page, redo all the wishlist items in the local DB just to make sure.
   async verifyWishlistedItems () {
-    const records = await handle(this.db.tracks.where({
-      wishlisted: 1,
-    }).toArray());
-    const wishlistedRecords = records[1];
-    for (const oldRecord of wishlistedRecords) {
-      const [oldErr] = await handle(this.db.tracks.update(oldRecord.id, {wishlisted: 0}));
-      if (oldErr) return console.log(oldErr);
-    }
+    await this.unwishAll();
     for (const newRecord of this.items) {
       const [newErr] = await handle(this.db.tracks.put({id: newRecord.id, wishlisted: 1}));
       if (newErr) return console.log(newErr);
@@ -4841,8 +4946,6 @@ function start() {
   const db = new Dexie('HardstyleComDB');
   const enhancer = new HardstyleComEnhancer(db);
 
-  // $.cookie('enhancer_skip', 'true', { expires: 7 });
-
   $(".button.play").click(async function(ev) {
     const button = ev.currentTarget;
     const row = $(button).parents("tr");
@@ -4854,6 +4957,10 @@ function start() {
     enhancer.markRow(row, 'track');
     enhancer.updatePlayer(item);
     return true;
+  });
+
+  $('#jp_container_1').on('click', '#autoPlayContainer>.csstooltip>a.player-button', function(ev) {
+    enhancer.switchAutoPlayCookie();
   });
 
   $('#player_forward_button').click(function() {
@@ -4881,6 +4988,11 @@ function start() {
     return true;
   });
 
+  $('.tracklist-bottom .empty').click(function(ev) {
+    ev.preventDefault();
+    enhancer.clearWishlist(ev);
+  });
+
   $("#jplayer").bind($.jPlayer.event.ended, function() {
     setTimeout(function(){
       enhancer.switchTrack('next');
@@ -4899,7 +5011,6 @@ function start() {
     // console.log(ev);
     // console.log(XMLHttpRequest);
     // console.log(ajaxOptions);
-    // console.log('Ajax call completed');
     const requestUrl = ajaxOptions.url;
     switch(true) {
       case requestUrl.includes('call/wishlist'):
@@ -4909,10 +5020,10 @@ function start() {
         } else if (reponseText === 'Removed from wish list') {
           enhancer.wishlistCallComplete(false);
         }
-        else if (reponseText === 'Please login or register to use this feature') {
-          enhancer.wishlistCallComplete(true);
-        } else if (reponseText === 'Already in wish list') {
-        }
+        // else if (reponseText === 'Please login or register to use this feature') {
+        //   enhancer.wishlistCallComplete(true);
+        // } else if (reponseText === 'Already in wish list') {
+        // }
         break;
       default:
         return;
