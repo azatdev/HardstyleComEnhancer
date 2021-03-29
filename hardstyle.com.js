@@ -4523,6 +4523,12 @@ if (!Array.prototype.last){
   };
 };
 
+if (!Array.prototype.random){
+  Array.prototype.random = function(){
+    return this[Math.floor(Math.random() * this.length)]
+  };
+};
+
 function handle (promise) {
   return promise.then(data =>{
     return [null, data];
@@ -4536,6 +4542,7 @@ class HardstyleComEnhancer {
   constructor(db) {
     this.pageType;
     this.items = [];
+    this.playedItems = [];
     this.albumInfo = {};
     this.playerItem;
     this.wishlistItem;
@@ -4612,7 +4619,6 @@ class HardstyleComEnhancer {
       wishlisted: itemRecord ? itemRecord.wishlisted : false,
       listenedTo: itemRecord ? true : false,
     }
-    // this.items.push(item);
     return item;
   }
   // construct duckduckgo "I'm feeling lucky" link to youtube
@@ -4787,15 +4793,21 @@ class HardstyleComEnhancer {
     } else if (this.pageType === 'wishlist') {
       this.addClassToDeleteButton();
       this.verifyWishlistedItems();
-    } 
-    // else if (this.pageType === 'top40') {
-      
-    // }
+    } else if (this.pageType === 'top40') {
+      $('#top100').show();
+      this.scrollTo($('body'), 0)
+    }
   }
   // create track info in the database
   putRecord(itemInfo, payload) {
     let itemRecord = this.db[itemInfo.type === 'album' ? 'albums' : 'tracks'].put(payload);
     return itemRecord;
+  }
+  // scroll to element
+  scrollTo(element, duration) {
+    $([document.documentElement, document.body]).animate({
+      scrollTop: element.offset().top - 220
+    }, duration);
   }
   // update the class items row to listened
   setListened(itemId) {
@@ -4807,35 +4819,86 @@ class HardstyleComEnhancer {
     }
   }
   // when track ends or next button is clicked
-  switchTrack(direction) {
+  switchTrack(direction, auto) {
     let currentIndex = this.items.indexOf(this.playerItem);
-    if (currentIndex < 0) return false;
+    if (currentIndex < 0 || !this.autoPlay) return false;
     const listLength = this.items.length;
     let nextItem = undefined;
     let notFound = true;
-    let trackCheck;
 
-    while (notFound) {
-      trackCheck = direction === 'next' ? currentIndex + 1 >= listLength : trackCheck = currentIndex < -1
-      if (trackCheck) {
-        nextItem = this.items.find(element => element.listenedTo === false && element.type === 'track');
-        notFound = false;
-      } else {
-        let nextCheck = this.items[currentIndex].type === 'track';
-        if (direction === 'next') {
-          currentIndex++
-          nextCheck = this.items[currentIndex].listenedTo === false && this.items[currentIndex].type === 'track';
+    const prevItem = () => {
+      if (this.playedItems.length < 2) return false;
+      this.playedItems.pop(); // remove current item
+      const prevTrack = this.playedItems.pop(); // remove the prev item and return it to prevTrack
+      return this.trackItems().find(element => element.id === prevTrack);
+    }
+
+    const nextNew = () => {
+      while (notFound) {
+        if (currentIndex + 1 >= listLength) {
+          nextItem = this.trackItems().find(element => element.listenedTo === false);
+          notFound = false;
         } else {
-          currentIndex--
-          if (currentIndex < 0) currentIndex = this.items.length - 1
-        }
-        if (nextCheck) {
+          currentIndex++
+          if (this.items[currentIndex].listenedTo !== false) continue;
           nextItem = this.items[currentIndex];
           notFound = false;
         }
       }
+      return nextItem;
     }
-    if (nextItem) $('tr[data-itemid="'+ nextItem.id +'"]').find('.play').first().trigger('click');
+
+    const nextTrack = () => {
+      currentIndex++
+      if (currentIndex < listLength) {
+        nextItem = this.items[currentIndex];
+        notFound = false;
+        return nextItem;
+      }
+    }
+
+    const shuffleNew = () => {
+      const newTracks = this.trackItems().filter(element => element.listenedTo === false);
+      return newTracks.random();
+    }
+
+    const shuffleTracks = () => {
+      const notYetPlayedTracks = this.trackItems().filter(element => !this.playedItems.includes(element.id));
+      return notYetPlayedTracks.random();
+    }
+
+    if (direction === 'prev') {
+      nextItem = prevItem();
+    } else {
+      switch (this.autoPlay) {
+        case 1:
+          nextItem = nextNew();
+          break;
+        case 2:
+          nextItem = nextTrack();
+          break;
+        case 3:
+          nextItem = shuffleNew();
+          break;
+        case 4:
+          nextItem = shuffleTracks();
+          break;
+        case 5:
+          nextItem = auto ? false : nextTrack();
+          break;
+        default:
+          break;
+      }
+    }
+    if (nextItem) {
+      const row = $('tr[data-itemid="'+ nextItem.id +'"]');
+      this.scrollTo(row, 200);
+      row.find('.play').first().trigger('click');
+    }
+  }
+  // return only items that are tracks
+  trackItems () {
+    return this.items.filter(element => element.type === 'track');
   }
   // used for when the user enters on wishlist page to sync wishlist with local and when user clicks Clear Wishlist
   async unwishAll() {
@@ -4861,6 +4924,7 @@ class HardstyleComEnhancer {
     $('#player_youtube_button').attr('target', '_blank');
     $("#player_wishlist_button").data('itemId', item.id);
     this.playerItem = item;
+    this.playedItems.push(item.id);
     if (item.wishlisted) {
       $("#player_wishlist_button").addClass('wishlisted');
     } else {
@@ -4946,19 +5010,6 @@ function start() {
   const db = new Dexie('HardstyleComDB');
   const enhancer = new HardstyleComEnhancer(db);
 
-  $(".button.play").click(async function(ev) {
-    const button = ev.currentTarget;
-    const row = $(button).parents("tr");
-    const itemId = parseInt(button.attributes.onclick.textContent.match(/\d+/gi).join(''));
-    const item = enhancer.getItem(itemId);
-    const [err] = await handle(enhancer.putRecord({type: 'track', id: itemId}, {id: itemId, wishlisted: item.wishlisted ? 1 : 0 }));
-    if (err) return console.log(err);
-    enhancer.setListened(itemId);
-    enhancer.markRow(row, 'track');
-    enhancer.updatePlayer(item);
-    return true;
-  });
-
   $('#jp_container_1').on('click', '#autoPlayContainer>.csstooltip>a.player-button', function(ev) {
     enhancer.switchAutoPlayCookie();
   });
@@ -4966,11 +5017,11 @@ function start() {
   $('#player_forward_button').click(function() {
     enhancer.switchTrack('next');
   });
-
+  
   $('#player_youtube_button').click(function() {
     $("#jplayer").jPlayer("pause");
   });
-
+  
   $('#player_backward_button').click(function() {
     enhancer.switchTrack('prev');
   });
@@ -4995,16 +5046,24 @@ function start() {
 
   $("#jplayer").bind($.jPlayer.event.ended, function() {
     setTimeout(function(){
-      enhancer.switchTrack('next');
+      enhancer.switchTrack('next', true);
     }, 2000);
   });
 
-  $("#jplayer").bind($.jPlayer.event.play, function() {
+  $("#jplayer").bind($.jPlayer.event.play, async function() {
     const mediaUrl = $('#jplayer').data('jPlayer').status['src'];
     const itemId = enhancer.extractId(mediaUrl);
     const row = $(`tr[data-itemid="${itemId}"]`);
+
+    const item = enhancer.getItem(itemId);
+    const [err] = await handle(enhancer.putRecord({type: 'track', id: itemId}, {id: itemId, wishlisted: item.wishlisted ? 1 : 0 }));
+    if (err) return console.log(err);
+    enhancer.setListened(itemId);
+    enhancer.updatePlayer(item);
+
     $('table.list tr.playing').removeClass('playing');
     row.addClass('playing');
+    enhancer.markRow(row, 'track');
   });
 
   $(document).ajaxComplete(function(ev, XMLHttpRequest, ajaxOptions) {
